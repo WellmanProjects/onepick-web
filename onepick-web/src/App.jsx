@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import api from "./api.js";
 import { CRESTS } from "./crests.js";
 import {
   Trophy, Users, Lock, Check, Search, LogOut, Plus, Info,
-  Crown, Shield, ChevronRight, RotateCcw, Flame, Calendar, ChevronDown, Newspaper, BarChart3, AlertTriangle, ExternalLink
+  Crown, Shield, Home as HomeIcon, ChevronRight, RotateCcw, Flame, Calendar, ChevronDown, Newspaper, BarChart3, AlertTriangle, ExternalLink, Bell, BellOff
 } from "lucide-react";
 
 /* ============================================================
@@ -352,7 +352,7 @@ export default function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [user, setUser] = useState(null);                   // {id, email, username}
   const [authMode, setAuthMode] = useState(null);           // null = show landing page
-  const [tab, setTab] = useState("pick");
+  const [tab, setTab] = useState("home");
   const [now, setNow] = useState(Date.now());
   const [picks, setPicks] = useState({});                   // {gameweek: playerId}
   const [lpicks, setLpicks] = useState({});                 // {leagueId: {gameweek: {slot: playerId}}}  slot = GK/DEF/MID/FWD, or ANY
@@ -361,6 +361,9 @@ export default function App() {
   const [myPts, setMyPts] = useState({});                   // {"playerId|gameweek": {points, provisional, breakdown}}
   const [news, setNews] = useState([]);                    // team news headlines
   const [toast, setToast] = useState("");
+  const [digestOn, setDigestOn] = useState(null);          // email reminders: null = not available yet (database update 009)
+  const [prefOpen, setPrefOpen] = useState(false);
+  const [unsub, setUnsub] = useState(() => { try { const m = window.location.hash.match(/unsubscribe=([0-9a-f-]{36}|[\w-]+)/i); return m ? { token: m[1], state: "working" } : null; } catch { return null; } });
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 4500); };
 
   useEffect(() => {
@@ -399,12 +402,24 @@ export default function App() {
     } catch (e) { flash(friendlyError(e.message)); }
   };
   useEffect(() => {
+    if (!unsub || unsub.state !== "working") return;
+    api.unsubscribe(unsub.token).then((ok) => setUnsub({ ...unsub, state: ok ? "done" : "bad" })).catch(() => setUnsub({ ...unsub, state: "bad" }));
+  }, []);
+  useEffect(() => {
+    if (!user) { setDigestOn(null); setPrefOpen(false); return; }
+    api.getDigest().then(setDigestOn).catch(() => setDigestOn(null));
+  }, [user && user.id]);
+  useEffect(() => {
     if (!user) { setPicks({}); setLpicks({}); setLeagues([]); setTables({}); setMyPts({}); return; }
     refresh();
     const t = setInterval(refresh, 120000);
     return () => clearInterval(t);
   }, [user && user.id]);
 
+  if (unsub) return <Centered><Logo h={48} />
+    <p className="mt-4 font-semibold">{unsub.state === "working" ? "Updating your email settings…" : unsub.state === "done" ? "You're unsubscribed." : "That unsubscribe link didn't work."}</p>
+    <p className="text-sm mt-1" style={{ color: MUTED }}>{unsub.state === "done" ? "We won't send you gameweek emails any more. You can turn them back on any time from the bell icon once you're signed in." : unsub.state === "bad" ? "You can switch emails off from the bell icon once you're signed in." : ""}</p>
+    {unsub.state !== "working" && <button onClick={() => { window.location.hash = ""; setUnsub(null); }} className="mt-4 px-4 py-2 rounded-xl text-white font-bold" style={{ background: BLUE }}>Go to {APP_NAME}</button>}</Centered>;
   if (boot.state === "loading" || !authChecked)
     return <Centered><div className="animate-pulse text-sm" style={{ color: MUTED }}>Loading {APP_NAME}…</div></Centered>;
   if (boot.state === "error")
@@ -446,6 +461,8 @@ export default function App() {
     headRows.forEach((r) => { if (!headGws || r.gameweek_id == null || headGws.has(r.gameweek_id)) t.set(r.user_id, (t.get(r.user_id) || 0) + (r.points || 0)); else if (!t.has(r.user_id)) t.set(r.user_id, 0); });
     return [...t.entries()].map(([id, total]) => ({ id, total }));
   })();
+  const boardNames = {}; headRows.forEach((r) => { if (r.username) boardNames[r.user_id] = r.username; });
+  const homeBoard = mainBoard.map((r) => ({ ...r, name: boardNames[r.id] || "Player" })).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
   const myTotal = mainBoard.find((r) => r.id === user.id)?.total || 0;
   const myRank = 1 + mainBoard.filter((r) => r.total > myTotal).length;
 
@@ -493,6 +510,14 @@ export default function App() {
     ...resetLeagues.map((lg) => leagueCtx(lg)),
   ];
 
+  // what your picks scored in the last gameweek, once those points are in
+  const lastWeekPts = (() => {
+    const g = currentGW - 1; if (g < 1) return null;
+    const ids = official ? Object.values((lpicks[official.id] || {})[g] || {}) : (picks[g] ? [picks[g]] : []);
+    const got = ids.map((id) => myPts[id + "|" + g]).filter(Boolean);
+    return got.length ? got.reduce((n, r) => n + (r.points || 0), 0) : null;
+  })();
+
   // The planner saves several gameweeks at once. Old picks in changed slots are cleared first, so players can move between weeks.
   const savePlan = async (changes) => {
     if (!official) return { ok: 0, failed: changes.length };
@@ -514,13 +539,13 @@ export default function App() {
     return { ok, failed };
   };
 
-  const logout = async () => { await api.signOut(); setAuthMode(null); setTab("pick"); };
+  const logout = async () => { await api.signOut(); setAuthMode(null); setTab("home"); };
   const createLeague = async (name, format, reset) => { const code = await api.createLeague(name, format, reset); await refresh(); return code; };
   const joinLeague = async (code) => {
     try { await api.joinLeague(code); await refresh(); return ""; } catch (e) { return /No league/i.test(e.message) ? "No league found with that code." : friendlyError(e.message); }
   };
 
-  const tabs = [{ id: "pick", label: "Pick", icon: Check }, ...(official && official.bySlot ? [{ id: "plan", label: "Plan", icon: Flame }] : []), { id: "fixtures", label: "Fixtures", icon: BarChart3 }, { id: "news", label: "Team news", icon: Newspaper }, { id: "season", label: "My picks", icon: Calendar }, { id: "leagues", label: "Leagues", icon: Users }, { id: "rules", label: "Rules", icon: Info }];
+  const tabs = [{ id: "home", label: "Home", icon: HomeIcon }, { id: "pick", label: "Pick", icon: Check }, ...(official && official.bySlot ? [{ id: "plan", label: "Plan", icon: Flame }] : []), { id: "fixtures", label: "Fixtures", icon: BarChart3 }, { id: "news", label: "Team news", icon: Newspaper }, { id: "season", label: "My picks", icon: Calendar }, { id: "leagues", label: "Leagues", icon: Users }, { id: "rules", label: "Rules", icon: Info }];
 
   return (
     <div className="min-h-screen" style={{ background: BG, fontFamily: FONT, color: INK }}>
@@ -536,6 +561,16 @@ export default function App() {
               <span className="text-[11px] font-medium" style={{ color: MUTED }}>pts{officialRows && curPeriod ? " in " + curPeriod.label : ""} · #{myRank} of {Math.max(mainBoard.length, 1)}</span>
             </div>
             <div className="hidden sm:block text-sm font-medium">{user.username}</div>
+            {digestOn !== null && <div className="relative">
+              <button onClick={() => setPrefOpen((o) => !o)} title="Email reminders" aria-label="Email reminders" className="p-2 rounded-lg hover:bg-black/5 transition-colors" style={{ color: digestOn ? BLUE : MUTED }}>{digestOn ? <Bell size={18} /> : <BellOff size={18} />}</button>
+              {prefOpen && <div className="absolute right-0 top-11 w-72 rounded-2xl bg-white border shadow-lg p-4 z-30" style={{ borderColor: LINE }}>
+                <div className="font-bold text-sm">Gameweek emails</div>
+                <p className="text-xs mt-1 leading-relaxed" style={{ color: MUTED }}>The day before picks lock we email your fixtures, your picks, your points and the players most likely to score.</p>
+                <button onClick={async () => { const next = !digestOn; setDigestOn(next); try { await api.setDigest(next); } catch (e) { setDigestOn(!next); flash(friendlyError(e.message)); } }}
+                  className="mt-3 w-full px-3 py-2 rounded-xl text-sm font-bold text-white" style={{ background: digestOn ? "#5A6B85" : BLUE }}>{digestOn ? "Turn emails off" : "Turn emails on"}</button>
+                <div className="text-[11px] mt-2" style={{ color: MUTED }}>Sent to {user.email}</div>
+              </div>}
+            </div>}
             <button onClick={logout} title="Log out" className="p-2 rounded-lg hover:bg-black/5 transition-colors" style={{ color: MUTED }}><LogOut size={18} /></button>
           </div>
         </div>
@@ -551,6 +586,7 @@ export default function App() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6">
+        {tab === "home" && <HomeView user={user} currentGW={currentGW} now={now} closed={closed} over={over} official={official} ctx={ctxs[0]} myPts={myPts} news={news} board={homeBoard} myRank={myRank} myTotal={myTotal} periodLabel={curPeriod ? curPeriod.label : null} lastWeekPts={lastWeekPts} onGo={setTab} />}
         {tab === "pick" && <PickView currentGW={currentGW} ctxs={ctxs} closed={closed} now={now} news={news} onNews={() => setTab("news")} />}
         {tab === "fixtures" && <FixturesView currentGW={currentGW} />}
         {tab === "news" && <NewsView news={news} now={now} />}
@@ -901,6 +937,19 @@ function PickView({ currentGW, ctxs, closed, now, news, onNews }) {
   const selPlayer = sel ? BY_ID[sel] : null;
   const replacing = selPlayer ? (bySlot ? slotPick(selPlayer.pos) : pickedList[0]) : null;
   const jumpTo = (pos) => { setPosFilter(pos); setTimeout(() => { const el = document.getElementById("player-list"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 50); };
+  // once the big header scrolls out of view, a slim bar with this week's picks stays pinned under the site header
+  const heroRef = useRef(null);
+  const [heroSeen, setHeroSeen] = useState(true);
+  const [hdrH, setHdrH] = useState(108);
+  useEffect(() => {
+    const el = heroRef.current; if (!el || typeof IntersectionObserver === "undefined") return;
+    const hh = () => { const h = document.querySelector("header"); return h ? Math.round(h.getBoundingClientRect().height) : 108; };
+    setHdrH(hh());
+    const io = new IntersectionObserver(([e]) => setHeroSeen(e.isIntersecting), { rootMargin: "-" + hh() + "px 0px 0px 0px" });
+    io.observe(el);
+    const onResize = () => setHdrH(hh()); window.addEventListener("resize", onResize);
+    return () => { io.disconnect(); window.removeEventListener("resize", onResize); };
+  }, [c.id]);
   const pct = Math.min(100, Math.round((c.progress.used / c.progress.total) * 100));
   const field = "px-3 py-2.5 rounded-xl bg-white border text-sm focus:outline-none focus:ring-2";
   return (
@@ -916,7 +965,7 @@ function PickView({ currentGW, ctxs, closed, now, news, onNews }) {
           </div>
         </div>
       )}
-      <div className="relative overflow-hidden rounded-2xl p-5 sm:p-6 mb-5 text-white" style={{ background: "linear-gradient(135deg,#0A2342,#1B4F8F)", boxShadow: SHADOW }}>
+      <div ref={heroRef} className="relative overflow-hidden rounded-2xl p-5 sm:p-6 mb-5 text-white" style={{ background: "linear-gradient(135deg,#0A2342,#1B4F8F)", boxShadow: SHADOW }}>
         <div className="flex flex-wrap items-end justify-between gap-5">
           <div className="min-w-0">
             <div className="text-xs font-semibold tracking-wide" style={{ color: "rgba(255,255,255,0.7)" }}>GAMEWEEK {currentGW}{c.id !== "main" || ctxs.length > 1 ? " · " + c.label.toUpperCase() : ""}</div>
@@ -971,11 +1020,32 @@ function PickView({ currentGW, ctxs, closed, now, news, onNews }) {
         </div>
       </div>
 
+      <div className="sticky z-10 h-0" style={{ top: hdrH + 8 }}>
+        <div aria-hidden={heroSeen} className={"absolute inset-x-0 top-0 rounded-xl text-white px-2.5 py-2 transition-all duration-200 " + (heroSeen ? "opacity-0 -translate-y-2 pointer-events-none" : "opacity-100")} style={{ background: DEEP, boxShadow: "0 8px 24px rgba(10,35,66,0.35)" }}>
+          <div className={"grid gap-1.5 " + (bySlot ? "grid-cols-4" : "grid-cols-1")}>
+            {(bySlot ? ["GK", "DEF", "MID", "FWD"] : [null]).map((pos) => {
+              const sp = bySlot ? slotPick(pos) : picked;
+              return (
+                <div key={pos || "one"} className="rounded-lg px-2 py-1.5 min-w-0" style={{ background: "rgba(255,255,255,0.1)" }}>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {pos && <PosChip pos={pos} />}
+                    {sp ? <><span className="font-bold text-sm truncate">{sp.name}</span>{closed ? <Lock size={12} className="shrink-0" style={{ color: VOLT }} /> : <Check size={13} className="shrink-0" style={{ color: VOLT }} />}</>
+                      : <button onClick={() => !closed && pos && jumpTo(pos)} disabled={closed || !pos} className="text-sm font-bold truncate text-left" style={{ color: closed ? "rgba(255,255,255,0.55)" : VOLT }}>{closed ? "Not picked" : pos ? "Pick" : "No pick yet"}</button>}
+                  </div>
+                  {sp && <div className="text-[10px] truncate hidden sm:block mt-0.5" style={{ color: "rgba(255,255,255,0.65)" }}>{sp.team}</div>}
+                </div>);
+            })}
+          </div>
+        </div>
+      </div>
+
+      <FitnessPanel fixByTeam={fixByTeam} pickedList={pickedList} />
+
       <TopPicks fixByTeam={fixByTeam} curIds={curIds} sel={sel} usedIds={usedIds} clubBlocked={clubBlocked} onPick={choose} closed={closed} lastGW={currentGW > 1 ? currentGW - 1 : 0} />
 
       <FixturesPanel gw={currentGW} fixtures={gwFixtures} />
 
-      <TeamNewsPanel gw={currentGW} fixByTeam={fixByTeam} pickedList={pickedList} news={news} now={now} onAll={onNews} />
+      <TeamNewsPanel gw={currentGW} fixByTeam={fixByTeam} news={news} now={now} onAll={onNews} />
 
       <ScoringPanel />
 
@@ -1468,36 +1538,52 @@ function NewsItem({ n, now }) {
 }
 
 /* Pick screen: what's happening at the clubs playing this gameweek */
-function TeamNewsPanel({ gw, fixByTeam, pickedList, news, now, onAll }) {
-  const [open, setOpen] = useState(true);
+function FitnessPanel({ fixByTeam, pickedList }) {
+  const [all, setAll] = useState(false);
   const playing = useMemo(() => new Set(Object.keys(fixByTeam)), [fixByTeam]);
   const flagged = pickedList.filter((p) => availLabel(p));
   const key = useMemo(() => PL_POOL.filter((p) => playing.has(p.team) && ["d", "i", "s"].includes(p.status) && p.news && p.rating >= 4)
     .sort((a, b) => String(b.newsAdded || "").localeCompare(String(a.newsAdded || "")) || b.rating - a.rating).slice(0, 8), [playing]);
-  const items = (news || []).filter((n) => (n.team_ids || []).some((id) => playing.has(TEAM_NAME[id]))).slice(0, 5);
-  if (!flagged.length && !key.length && !items.length) return null;
+  if (!flagged.length && !key.length) return null;
+  const shown = all ? key : key.slice(0, 4);
+  return (
+    <div className="rounded-2xl bg-white border mb-5 px-4 py-3.5 space-y-3" style={{ borderColor: LINE, boxShadow: SHADOW }}>
+      {flagged.length > 0 && <div className="rounded-xl px-3 py-2.5 bg-amber-50 border border-amber-200">
+        <div className="text-xs font-bold text-amber-900 mb-1 flex items-center gap-1.5"><AlertTriangle size={13} /> Check your picks</div>
+        {flagged.map((p) => <div key={p.id} className="text-sm"><span className="font-semibold">{p.name}</span> <AvailChip p={p} /> <span className="text-xs" style={{ color: MUTED }}>{p.news}</span></div>)}
+      </div>}
+      {key.length > 0 && <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="text-xs font-semibold" style={{ color: MUTED }}>Key players with fitness news</div>
+          {key.length > 4 && <button onClick={() => setAll(!all)} className="text-xs font-semibold" style={{ color: BLUE }}>{all ? "Show fewer" : "Show " + (key.length - 4) + " more"}</button>}
+        </div>
+        <div className="grid sm:grid-cols-2 gap-1.5">{shown.map((p) => <div key={p.id} className="flex items-start gap-2 rounded-lg border px-2.5 py-1.5" style={{ borderColor: "#EEF2F8" }}>
+          <Crest team={p.team} size={20} /><div className="min-w-0 flex-1"><div className="flex items-center gap-1.5 text-sm font-semibold"><span className="truncate">{p.name}</span><PosChip pos={p.pos} /><AvailChip p={p} /></div><div className="text-[11px] truncate" style={{ color: MUTED }} title={p.news}>{p.news}</div></div></div>)}</div>
+      </div>}
+    </div>
+  );
+}
+
+function TeamNewsPanel({ gw, fixByTeam, news, now, onAll }) {
+  const [open, setOpen] = useState(true);
+  const [more, setMore] = useState(false);
+  const playing = useMemo(() => new Set(Object.keys(fixByTeam)), [fixByTeam]);
+  const items = (news || []).filter((n) => (n.team_ids || []).some((id) => playing.has(TEAM_NAME[id]))).slice(0, 8);
+  if (!items.length) return null;
+  const shown = more ? items : items.slice(0, 2);
   return (
     <div className="rounded-2xl bg-white border mb-5" style={{ borderColor: LINE, boxShadow: SHADOW }}>
       <button onClick={() => setOpen(!open)} aria-expanded={open} className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left">
         <span className="flex items-center gap-2 font-bold"><Newspaper size={16} style={{ color: BLUE }} /> Team news for gameweek {gw}</span>
-        <span className="flex items-center gap-2 text-xs" style={{ color: MUTED }}>{flagged.length ? <span className="font-bold text-rose-600">{flagged.length} of your picks flagged</span> : "Injuries and line-ups"}<ChevronRight size={16} className={"transition-transform " + (open ? "rotate-90" : "")} /></span>
+        <span className="flex items-center gap-2 text-xs" style={{ color: MUTED }}>Latest headlines<ChevronRight size={16} className={"transition-transform " + (open ? "rotate-90" : "")} /></span>
       </button>
       {open && (
-        <div className="px-4 pb-4 pt-3 border-t space-y-4" style={{ borderColor: LINE }}>
-          {flagged.length > 0 && <div className="rounded-xl px-3 py-2.5 bg-amber-50 border border-amber-200">
-            <div className="text-xs font-bold text-amber-900 mb-1 flex items-center gap-1.5"><AlertTriangle size={13} /> Check your picks</div>
-            {flagged.map((p) => <div key={p.id} className="text-sm"><span className="font-semibold">{p.name}</span> <AvailChip p={p} /> <span className="text-xs" style={{ color: MUTED }}>{p.news}</span></div>)}
-          </div>}
-          {key.length > 0 && <div>
-            <div className="text-xs font-semibold mb-1.5" style={{ color: MUTED }}>Key players with fitness news</div>
-            <div className="grid sm:grid-cols-2 gap-1.5">{key.map((p) => <div key={p.id} className="flex items-start gap-2 rounded-lg border px-2.5 py-1.5" style={{ borderColor: "#EEF2F8" }}>
-              <Crest team={p.team} size={20} /><div className="min-w-0 flex-1"><div className="flex items-center gap-1.5 text-sm font-semibold"><span className="truncate">{p.name}</span><PosChip pos={p.pos} /><AvailChip p={p} /></div><div className="text-[11px] truncate" style={{ color: MUTED }} title={p.news}>{p.news}</div></div></div>)}</div>
-          </div>}
-          {items.length > 0 && <div>
-            <div className="text-xs font-semibold mb-1.5" style={{ color: MUTED }}>Latest headlines</div>
-            <div className="space-y-1.5">{items.map((n) => <NewsItem key={n.id} n={n} now={now} />)}</div>
-          </div>}
-          <button onClick={onAll} className="text-sm font-semibold" style={{ color: BLUE }}>See all team news →</button>
+        <div className="px-4 pb-4 pt-3 border-t space-y-2" style={{ borderColor: LINE }}>
+          <div className="space-y-1.5">{shown.map((n) => <NewsItem key={n.id} n={n} now={now} />)}</div>
+          <div className="flex items-center gap-4">
+            {items.length > 2 && <button onClick={() => setMore(!more)} className="text-sm font-semibold" style={{ color: BLUE }}>{more ? "Show fewer headlines" : "Show " + (items.length - 2) + " more headlines"}</button>}
+            <button onClick={onAll} className="text-sm font-semibold" style={{ color: BLUE }}>See all team news →</button>
+          </div>
         </div>
       )}
     </div>
@@ -1667,6 +1753,165 @@ function PlanPicker({ gw, pos, fx, estOf, used, clubs, currentId, onChoose, onRe
           })}
           {rows.length > 80 && <div className="px-3 py-2 text-xs text-center" style={{ color: MUTED }}>Showing the top 80. Search to narrow it down.</div>}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Home: a condensed view of this gameweek ---------------- */
+function HomeCard({ title, icon: Icon, right, children, className = "" }) {
+  return (
+    <section className={"rounded-2xl bg-white border " + className} style={{ borderColor: LINE, boxShadow: SHADOW }}>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 pt-4 pb-3">
+        <h3 className="font-extrabold flex items-center gap-2" style={{ letterSpacing: "-0.01em" }}>{Icon && <Icon size={16} className="shrink-0" style={{ color: BLUE }} />}{title}</h3>
+        {right}
+      </div>
+      <div className="px-4 pb-4">{children}</div>
+    </section>
+  );
+}
+
+function HomeView({ user, currentGW, now, closed, over, official, ctx, myPts, news, board, myRank, myTotal, periodLabel, lastWeekPts, onGo }) {
+  const fx = getTeamFixtures();
+  const [lw, setLw] = useState(null);
+  const [pos, setPos] = useState("ALL");
+  const lastGW = currentGW > 1 ? currentGW - 1 : 0;
+  useEffect(() => {
+    if (!lastGW) { setLw([]); return; }
+    let off = false;
+    api.loadGwPoints(lastGW).then((r) => { if (!off) setLw(r); }).catch(() => { if (!off) setLw([]); });
+    return () => { off = true; };
+  }, [lastGW]);
+
+  const hour = Number(ukPart(UK_TIME, new Date(now).toISOString(), "hour"));
+  const hello = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const bySlot = !!(official && official.bySlot);
+  const picked = [...ctx.curIds].map((id) => BY_ID[id]).filter(Boolean);
+  const slots = bySlot ? ["GK", "DEF", "MID", "FWD"].map((p) => ({ pos: p, pl: picked.find((x) => x.pos === p) })) : [{ pos: null, pl: picked[0] }];
+  const filled = slots.filter((s) => s.pl).length;
+  const ptsOf = (pl) => { const r = myPts[pl.id + "|" + currentGW]; return r ? r.points : null; };
+  const playing = useMemo(() => new Set(FIXTURES.filter((f) => f[0] === currentGW).flatMap((f) => [TEAM_BY_SHORT[f[1]], TEAM_BY_SHORT[f[2]]])), [currentGW, FIXTURES.length]);
+  const myClubs = new Set(picked.map((p) => p.team));
+
+  // top scorers from the last scored gameweek
+  const scorers = (lw || []).filter((r) => r.points > 0 && BY_ID[r.player_id] && (pos === "ALL" || BY_ID[r.player_id].pos === pos))
+    .sort((a, b) => b.points - a.points || BY_ID[a.player_id].name.localeCompare(BY_ID[b.player_id].name)).slice(0, 5);
+  const maxPts = scorers.length ? scorers[0].points : 1;
+
+  // news: flagged picks first, then headlines from clubs that play this gameweek
+  const flagged = picked.filter((p) => availLabel(p));
+  const heads = (news || []).filter((n) => (n.team_ids || []).some((id) => playing.has(TEAM_NAME[id]))).slice(0, 3);
+  const fixtures = FIXTURES.filter((f) => f[0] === currentGW);
+  const days = []; fixtures.forEach((f) => { const d = f[3] ? koDay(f[3]) : "Date to be confirmed"; const l = days[days.length - 1]; if (l && l.day === d) l.items.push(f); else days.push({ day: d, items: [f] }); });
+  const top3 = board.slice(0, 3); const meIn = top3.some((r) => r.id === user.id); const me = board.find((r) => r.id === user.id);
+
+  return (
+    <div className="space-y-5 overflow-x-hidden">
+      {/* hero */}
+      <section className="relative overflow-hidden rounded-3xl text-white" style={{ background: PITCH, boxShadow: "0 18px 50px rgba(10,35,66,0.28)" }}>
+        <svg className="absolute -right-24 -top-24 opacity-10 pointer-events-none" width="420" height="420" viewBox="0 0 200 200" fill="none" stroke="#fff" strokeWidth="1.5" aria-hidden="true"><circle cx="100" cy="100" r="60" /><circle cx="100" cy="100" r="3" fill="#fff" /><path d="M0 100H200" /></svg>
+        <div className="relative p-5 sm:p-7">
+          <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold" style={{ color: "rgba(255,255,255,0.75)" }}>{hello}, {user.username}</div>
+              <div className="text-4xl sm:text-5xl mt-1" style={{ ...HEAD, lineHeight: 1.02 }}>Gameweek {currentGW}</div>
+              <div className="mt-2 inline-flex flex-wrap items-center gap-2 text-sm">
+                {over ? <span className="font-semibold">The season is complete.</span> : closed ? <span className="inline-flex items-center gap-1.5 font-semibold" style={{ color: VOLT }}><Lock size={14} /> Picks are locked</span> : <>
+                  <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 font-bold" style={{ background: "rgba(217,246,59,0.16)", color: VOLT }}><Flame size={14} />{untilDeadline(currentGW, now)}</span>
+                  <span style={{ color: "rgba(255,255,255,0.8)" }}>Deadline {koDay(deadlineOf(currentGW))}, {koTime(deadlineOf(currentGW))}</span></>}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2.5">
+              {[[periodLabel ? "Rank in " + periodLabel : "Rank", "#" + myRank + " of " + Math.max(board.length, 1)], [periodLabel ? "Points in " + periodLabel : "Points", String(myTotal)], ...(lastWeekPts != null ? [["Last gameweek", lastWeekPts + " pts"]] : [])].map(([k, v]) => (
+                <div key={k} className="rounded-2xl px-3.5 py-2.5 min-w-[84px]" style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.14)" }}>
+                  <div className="text-[11px] font-semibold leading-tight" style={{ color: "rgba(255,255,255,0.7)" }}>{k}</div>
+                  <div className="text-xl font-extrabold tabular-nums mt-0.5">{v}</div></div>))}
+            </div>
+          </div>
+
+          <div className={"mt-6 grid gap-2.5 " + (bySlot ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-1 sm:max-w-sm")}>
+            {slots.map((s, i) => {
+              const p = s.pl; const list = p ? (fx[p.team] || {})[currentGW] || [] : []; const pts = p ? ptsOf(p) : null;
+              if (!p) return (
+                <button key={i} onClick={() => onGo("pick")} disabled={closed || over} className="text-left rounded-2xl p-3.5 transition-colors hover:bg-white/10 disabled:opacity-60" style={{ border: "2px dashed rgba(255,255,255,0.35)" }}>
+                  <div className="flex items-center justify-between">{s.pos ? <PosChip pos={s.pos} /> : <span className="text-xs font-bold">Your pick</span>}<Plus size={16} style={{ color: VOLT }} /></div>
+                  <div className="font-bold mt-3" style={{ color: closed ? "rgba(255,255,255,0.6)" : VOLT }}>{closed ? "Not picked" : s.pos ? "Pick a " + POS_ONE[s.pos] : "Make your pick"}</div>
+                  <div className="text-[11px]" style={{ color: "rgba(255,255,255,0.6)" }}>{closed ? "Scores 0" : "Tap to choose"}</div>
+                </button>);
+              return (
+                <div key={i} className="rounded-2xl p-3.5 bg-white text-left" style={{ color: INK }}>
+                  <div className="flex items-center justify-between gap-2"><PosChip pos={p.pos} /><AvailChip p={p} />{pts != null && <span className="ml-auto text-xl font-extrabold tabular-nums" style={{ color: BLUE }}>{pts}</span>}</div>
+                  <div className="flex items-center gap-2 mt-2.5"><Crest team={p.team} size={26} /><div className="min-w-0"><div className="font-extrabold leading-tight truncate">{p.name}</div><div className="text-[11px] truncate" style={{ color: MUTED }}>{p.team}</div></div></div>
+                  <div className="mt-2 text-[11px]" style={{ color: MUTED }}>{list.length ? <FxInline list={list} /> : "No game this week"}</div>
+                </div>);
+            })}
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center gap-2.5">
+            {!over && <button onClick={() => onGo("pick")} className="px-5 py-2.5 rounded-xl font-extrabold hover:brightness-95 transition" style={{ background: VOLT, color: INK }}>{closed ? "See the pick screen" : filled === slots.length ? "Edit your picks" : filled ? "Finish your picks" : "Make your picks"}</button>}
+            {bySlot && !closed && <button onClick={() => onGo("plan")} className="px-5 py-2.5 rounded-xl font-semibold border border-white/35 hover:bg-white/10 transition-colors">Plan ahead</button>}
+            <span className="text-sm" style={{ color: "rgba(255,255,255,0.75)" }}>{filled} of {slots.length} picked{ctx.progress ? " · " + ctx.progress.used + " of " + ctx.progress.total + " used this " + (periodLabel ? "period" : "round") : ""}</span>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid lg:grid-cols-3 gap-5">
+        <HomeCard className="lg:col-span-2" title={lastGW ? "Top scorers, gameweek " + lastGW : "Top scorers"} icon={Trophy}
+          right={<div className="flex gap-1">{["ALL", "GK", "DEF", "MID", "FWD"].map((k) => <button key={k} onClick={() => setPos(k)} className={"px-2.5 py-1 rounded-full text-[11px] font-bold border transition-colors " + (pos === k ? "text-white border-transparent" : "bg-white hover:bg-black/5")} style={pos === k ? { background: DEEP } : { color: MUTED, borderColor: LINE }}>{k === "ALL" ? "All" : k}</button>)}</div>}>
+          {lw === null ? <div className="py-6 text-sm text-center" style={{ color: MUTED }}>Loading…</div> : scorers.length === 0 ? <div className="py-6 text-sm text-center" style={{ color: MUTED }}>Scores appear here once a gameweek has been played.</div> : (
+            <div className="space-y-1.5">
+              {scorers.map((r, i) => { const p = BY_ID[r.player_id]; const note = whatScored(r.breakdown); return (
+                <div key={r.player_id} className="flex items-center gap-3 rounded-xl px-2.5 py-2" style={{ background: i === 0 ? "rgba(217,246,59,0.2)" : "#F7F9FC" }}>
+                  <span className="w-5 text-center text-sm font-extrabold tabular-nums" style={{ color: MUTED }}>{i === 0 ? <Crown size={16} className="mx-auto" style={{ color: "#C9A400" }} /> : i + 1}</span>
+                  <Crest team={p.team} size={28} />
+                  <div className="min-w-0 flex-1"><div className="flex items-center gap-1.5 font-bold leading-tight"><span className="truncate">{p.name}</span><PosChip pos={p.pos} /></div>
+                    <div className="text-[11px] truncate" style={{ color: MUTED }}>{note || p.team}</div>
+                    <div className="h-1 rounded-full mt-1.5 hidden sm:block" style={{ background: "#E3E9F2" }}><div className="h-1 rounded-full" style={{ width: Math.max(8, Math.round((r.points / maxPts) * 100)) + "%", background: BLUE }} /></div></div>
+                  <span className="text-2xl font-extrabold tabular-nums" style={{ color: BLUE }}>{r.points}</span>
+                </div>); })}
+            </div>)}
+          <button onClick={() => onGo("pick")} className="mt-3 text-sm font-semibold" style={{ color: BLUE }}>See more on the pick screen →</button>
+        </HomeCard>
+
+        <HomeCard title="Top news" icon={Newspaper} right={<button onClick={() => onGo("news")} className="text-xs font-semibold" style={{ color: BLUE }}>All team news →</button>}>
+          <div className="space-y-2">
+            {flagged.length > 0 && <div className="rounded-xl px-3 py-2.5 bg-amber-50 border border-amber-200">
+              <div className="text-xs font-bold text-amber-900 mb-1 flex items-center gap-1.5"><AlertTriangle size={13} /> Check your picks</div>
+              {flagged.map((p) => <div key={p.id} className="text-sm"><span className="font-semibold">{p.name}</span> <AvailChip p={p} /> <span className="text-xs" style={{ color: MUTED }}>{p.news}</span></div>)}</div>}
+            {heads.map((n) => <NewsItem key={n.id} n={n} now={now} />)}
+            {!flagged.length && !heads.length && <div className="py-5 text-sm text-center" style={{ color: MUTED }}>No injury or line-up news for this gameweek yet.</div>}
+          </div>
+        </HomeCard>
+      </div>
+
+      <div className="grid lg:grid-cols-5 gap-5">
+        <HomeCard className="lg:col-span-3" title={"Gameweek " + currentGW + " fixtures"} icon={Calendar} right={<button onClick={() => onGo("fixtures")} className="text-xs font-semibold" style={{ color: BLUE }}>Difficulty →</button>}>
+          {days.length === 0 ? <div className="py-4 text-sm" style={{ color: MUTED }}>No fixtures scheduled.</div> : (
+            <div className="space-y-3">
+              {days.map((d) => <div key={d.day}>
+                <div className="text-[11px] font-bold tracking-wide mb-1" style={{ color: MUTED }}>{d.day.toUpperCase()}</div>
+                <div className="space-y-1">{d.items.map((f, i) => { const hn = TEAM_BY_SHORT[f[1]], an = TEAM_BY_SHORT[f[2]]; const mine = myClubs.has(hn) || myClubs.has(an); return (
+                  <div key={i} className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: mine ? "rgba(217,246,59,0.28)" : "#F7F9FC" }} title={mine ? "One of your picks plays here" : undefined}>
+                    <div className="flex items-center justify-end gap-1.5 min-w-0 text-sm font-bold"><span className="truncate">{f[1]}</span><Crest team={hn} size={20} /></div>
+                    <div className="text-[11px] font-bold tabular-nums px-1.5 py-0.5 rounded" style={{ background: "#E3E9F2", color: INK }}>{f[3] ? koTime(f[3]) : "TBC"}</div>
+                    <div className="flex items-center gap-1.5 min-w-0 text-sm font-bold"><Crest team={an} size={20} /><span className="truncate">{f[2]}</span></div>
+                  </div>); })}</div></div>)}
+              {myClubs.size > 0 && <div className="text-[11px]" style={{ color: MUTED }}><span className="inline-block w-2.5 h-2.5 rounded-sm align-middle mr-1.5" style={{ background: "rgba(217,246,59,0.6)" }} />Matches with one of your picks</div>}
+            </div>)}
+        </HomeCard>
+
+        <HomeCard className="lg:col-span-2" title={periodLabel ? "Table · " + periodLabel : "Table"} icon={Crown} right={<button onClick={() => onGo("leagues")} className="text-xs font-semibold" style={{ color: BLUE }}>All leagues →</button>}>
+          {board.length === 0 ? <div className="py-4 text-sm" style={{ color: MUTED }}>No scores yet.</div> : (
+            <div>
+              {top3.map((r, i) => <div key={r.id} className="flex items-center gap-3 py-2.5 border-b last:border-0" style={{ borderColor: "#EEF2F8", background: r.id === user.id ? "rgba(31,78,156,0.05)" : undefined }}>
+                <span className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-extrabold" style={{ background: i === 0 ? VOLT : "#E3E9F2" }}>{i + 1}</span>
+                <span className="flex-1 font-semibold truncate">{r.name}{r.id === user.id && <span className="text-xs font-normal" style={{ color: MUTED }}> (you)</span>}</span>
+                <span className="font-extrabold tabular-nums" style={{ color: BLUE }}>{r.total}</span></div>)}
+              {!meIn && me && <div className="flex items-center gap-3 py-2.5 mt-1 rounded-lg px-2 -mx-2" style={{ background: "rgba(31,78,156,0.06)" }}>
+                <span className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-extrabold" style={{ background: "#E3E9F2" }}>{myRank}</span>
+                <span className="flex-1 font-semibold">{me.name} <span className="text-xs font-normal" style={{ color: MUTED }}>(you)</span></span><span className="font-extrabold tabular-nums" style={{ color: BLUE }}>{me.total}</span></div>}
+            </div>)}
+        </HomeCard>
       </div>
     </div>
   );

@@ -44,6 +44,10 @@ const api = {
     const rows = ok(await sb.from("profiles").select("id").eq("username", username).limit(1));
     return rows.length > 0;
   },
+  /* email reminders (database update 009) */
+  async getDigest() { return ok(await sb.rpc("get_digest")); },
+  async setDigest(on) { return ok(await sb.rpc("set_digest", { on_off: on })); },
+  async unsubscribe(token) { return ok(await sb.rpc("unsubscribe_digest", { t: token })); },
   async getProfile(id) {
     const rows = ok(await sb.from("profiles").select("id, username, created_at").eq("id", id).limit(1));
     return rows[0] || null;
