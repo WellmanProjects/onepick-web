@@ -659,7 +659,7 @@ function AuthScreen({ onSignUp, onLogin, initialMode, onBack }) {
 }
 
 /* ---------------- Club crests + fixtures helpers ---------------- */
-const POS_ORDER = ["FWD", "MID", "DEF", "GK"];
+const POS_ORDER = ["GK", "DEF", "MID", "FWD"];
 const POS_ONE = { GK: "goalkeeper", DEF: "defender", MID: "midfielder", FWD: "forward" };
 const POS_LABEL = { FWD: "Forwards", MID: "Midfielders", DEF: "Defenders", GK: "Goalkeepers" };
 const UK_DAY = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" });
@@ -1233,6 +1233,8 @@ function LeagueBoard({ lg, rows, myId, currentGW, openPickIds }) {
       if (!m.has(r.user_id)) m.set(r.user_id, { id: r.user_id, name: r.username, gws: {} });
       if (r.gameweek_id != null) { const g = m.get(r.user_id).gws; const c = g[r.gameweek_id] || { names: [], pts: 0, items: [] }; c.names.push(r.player_name); c.pts += r.points || 0; c.items.push({ pid: r.player_id, name: r.player_name, pts: r.points || 0 }); g[r.gameweek_id] = c; }
     });
+    const rank = (pid) => { const i = ["GK", "DEF", "MID", "FWD"].indexOf((BY_ID[pid] || {}).pos); return i < 0 ? 9 : i; };   // always GK, DEF, MID, FWD
+    m.forEach((u) => Object.values(u.gws).forEach((c) => { c.items.sort((a, b) => rank(a.pid) - rank(b.pid)); c.names = c.items.map((x) => x.name); }));
     return [...m.values()];
   }, [rows]);
   const pts = (u, gws) => gws.reduce((n, gw) => n + ((u.gws[gw] || {}).pts || 0), 0);
@@ -1273,7 +1275,7 @@ function LeagueBoard({ lg, rows, myId, currentGW, openPickIds }) {
     <button key={label} onClick={() => { setGwSel(g); setOpenUser(null); }} className={"shrink-0 px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors " + (on ? "border-transparent" : "bg-white hover:bg-black/5")}
       style={on ? { background: "rgba(31,78,156,0.12)", color: BLUE, borderColor: BLUE } : { color: MUTED, borderColor: LINE }}>{label}{g != null && g === currentGW && !isLocked(g, Date.now()) ? <span className="ml-1 text-[10px]">· open</span> : null}</button>); };
   // what a player's line shows: their picks for the chosen gameweek (or the latest played one in the period view)
-  const mineOpen = (openPickIds || []).map((id) => BY_ID[id]).filter(Boolean);
+  const mineOpen = (openPickIds || []).map((id) => BY_ID[id]).filter(Boolean).sort((a, b) => ["GK", "DEF", "MID", "FWD"].indexOf(a.pos) - ["GK", "DEF", "MID", "FWD"].indexOf(b.pos));
   const itemsFor = (u, gw) => (u.gws[gw] || {}).items || [];
   const pickLine = (u) => {
     if (effGw != null) {
