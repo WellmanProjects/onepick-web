@@ -572,7 +572,7 @@ export default function App() {
               <button onClick={() => setPrefOpen((o) => !o)} title="Email reminders" aria-label="Email reminders" className="p-2 rounded-lg hover:bg-black/5 transition-colors" style={{ color: digestOn ? BLUE : MUTED }}>{digestOn ? <Bell size={18} /> : <BellOff size={18} />}</button>
               {prefOpen && <div className="absolute right-0 top-11 w-72 rounded-2xl bg-white border shadow-lg p-4 z-30" style={{ borderColor: LINE }}>
                 <div className="font-bold text-sm">Gameweek emails</div>
-                <p className="text-xs mt-1 leading-relaxed" style={{ color: MUTED }}>The day before picks lock we email your fixtures, your picks, your points and the players most likely to score.</p>
+                <p className="text-xs mt-1 leading-relaxed" style={{ color: MUTED }}>The day before picks lock we email your fixtures and likely top scorers, and after each gameweek we email how your team did and the league table.</p>
                 <button onClick={async () => { const next = !digestOn; setDigestOn(next); try { await api.setDigest(next); } catch (e) { setDigestOn(!next); flash(friendlyError(e.message)); } }}
                   className="mt-3 w-full px-3 py-2 rounded-xl text-sm font-bold text-white" style={{ background: digestOn ? "#5A6B85" : BLUE }}>{digestOn ? "Turn emails off" : "Turn emails on"}</button>
                 <div className="text-[11px] mt-2" style={{ color: MUTED }}>Sent to {user.email}</div>
