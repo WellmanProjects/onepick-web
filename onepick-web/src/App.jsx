@@ -76,6 +76,10 @@ function hydrate({ teams, players, gameweeks, fixtures }) {
 
 /* The open gameweek is the first one whose deadline is still in the future. */
 const deadlineOf = (gw) => (GAMEWEEKS.find((g) => g.id === gw) || {}).deadline_at;
+// A player whose club has a game this gameweek but none has kicked off yet: show "-" instead of 0, and when they play.
+const clubKickoffs = (team, gw) => FIXTURES.filter((f) => f[0] === gw && f[3] && (TEAM_BY_SHORT[f[1]] === team || TEAM_BY_SHORT[f[2]] === team)).map((f) => ({ ms: new Date(f[3]).getTime(), raw: f[3] })).filter((k) => !isNaN(k.ms)).sort((a, b) => a.ms - b.ms);
+const notPlayedYet = (team, gw, nowMs) => { const ks = clubKickoffs(team, gw); return ks.length > 0 && ks[0].ms > nowMs; };
+const playsText = (team, gw) => { const ks = clubKickoffs(team, gw); return ks.length ? koDay(ks[0].raw) + ", " + koTime(ks[0].raw) : ""; };
 const isLocked = (gw, nowMs) => { const d = deadlineOf(gw); return !d || new Date(d).getTime() <= nowMs; };
 function openGameweek(nowMs) {
   const g = GAMEWEEKS.find((x) => new Date(x.deadline_at).getTime() > nowMs);
@@ -1280,11 +1284,13 @@ function LeagueBoard({ lg, rows, myId, currentGW, openPickIds }) {
   const pickLine = (u) => {
     if (effGw != null) {
       if (!gwLocked) return u.id === myId ? (mineOpen.length ? mineOpen.map((x) => x.name).join(", ") : "No picks yet") : "Hidden until the deadline";
-      const it = itemsFor(u, effGw); return it.length ? it.map((x) => x.name + " " + x.pts).join(", ") : "No picks made";
+      const it = itemsFor(u, effGw); return it.length ? it.map((x) => x.name + " " + (unplayed(x.pid, effGw) ? "-" : x.pts)).join(", ") : "No picks made";
     }
     const last = Object.keys(u.gws).map(Number).filter((g) => gws.includes(g)).sort((a, b) => b - a)[0];
     return last ? `GW${last}: ${u.gws[last].names.join(", ")}` : "No locked picks yet";
   };
+  const unplayed = (pid, gw) => { const pl = BY_ID[pid]; return !!pl && notPlayedYet(pl.team, gw, Date.now()); };
+  const allUnplayed = (u, gw) => { const it = itemsFor(u, gw); return it.length > 0 && it.every((x) => unplayed(x.pid, gw)); };
   const bdNote = (it) => it.label === "Minutes played" ? it.value + " mins" : it.value > 1 ? "x " + it.value : "";
   const detail = (u) => {
     const gwBlock = (gw, showHead) => {
@@ -1298,8 +1304,9 @@ function LeagueBoard({ lg, rows, myId, currentGW, openPickIds }) {
         {showHead && <div className="flex items-center justify-between text-xs font-bold" style={{ color: MUTED }}><span>GAMEWEEK {gw}</span><span className="tabular-nums" style={{ color: BLUE }}>{(u.gws[gw] || {}).pts || 0} pts</span></div>}
         {its.map((x) => { const pl = BY_ID[x.pid]; const d = data[x.pid]; const bd = d && d.breakdown ? d.breakdown : [];
           return <div key={x.pid} className="rounded-xl border bg-white overflow-hidden" style={{ borderColor: LINE }}>
-            <div className="flex items-center gap-2 px-3 py-2 text-sm font-bold" style={{ background: "#F7F9FC" }}>{pl && <><Crest team={pl.team} size={20} /><PosChip pos={pl.pos} /></>}<span className="truncate">{x.name}</span><span className="ml-auto tabular-nums" style={{ color: BLUE }}>{x.pts} pts</span></div>
-            {!showHead && (bd.length ? bd.map((it, i) => <div key={i} className="flex items-center justify-between px-3 py-1.5 text-sm border-t" style={{ borderColor: "#EEF2F8" }}>
+            <div className="flex items-center gap-2 px-3 py-2 text-sm font-bold" style={{ background: "#F7F9FC" }}>{pl && <><Crest team={pl.team} size={20} /><PosChip pos={pl.pos} /></>}<span className="truncate">{x.name}</span><span className="ml-auto tabular-nums" style={{ color: BLUE }}>{unplayed(x.pid, gw) ? "-" : x.pts + " pts"}</span></div>
+            {unplayed(x.pid, gw) && <div className="px-3 py-1.5 text-xs border-t" style={{ borderColor: "#EEF2F8", color: MUTED }}>Plays {playsText(pl.team, gw)}</div>}
+            {!showHead && !unplayed(x.pid, gw) && (bd.length ? bd.map((it, i) => <div key={i} className="flex items-center justify-between px-3 py-1.5 text-sm border-t" style={{ borderColor: "#EEF2F8" }}>
               <span className="font-medium">{it.label}{bdNote(it) && <span className="ml-1.5 text-xs" style={{ color: MUTED }}>{bdNote(it)}</span>}</span>
               <span className="font-bold tabular-nums" style={{ color: it.points < 0 ? "#E11D48" : BLUE }}>{it.points > 0 ? "+" : ""}{it.points}</span></div>)
               : <div className="px-3 py-1.5 text-xs border-t" style={{ borderColor: "#EEF2F8", color: MUTED }}>{x.pts === 0 ? "Didn't play, or no points yet." : "Loading the breakdown…"}</div>)}
@@ -1339,7 +1346,7 @@ function LeagueBoard({ lg, rows, myId, currentGW, openPickIds }) {
                 {pickLine(row.u)}
               </div>
             </div>
-            <div className="font-extrabold tabular-nums text-lg" style={{ color: BLUE }}>{effGw != null && !gwLocked ? "-" : row.p}</div>
+            <div className="font-extrabold tabular-nums text-lg" style={{ color: BLUE }}>{effGw != null && (!gwLocked || allUnplayed(row.u, effGw)) ? "-" : row.p}</div>
             {!isOverall && <ChevronDown size={14} className={"shrink-0 transition-transform " + (isOpen ? "rotate-180" : "")} style={{ color: MUTED }} />}
           </button>
           {isOpen && <div className="px-4 pb-4 pt-1 pl-12">{detail(row.u)}</div>}
@@ -1898,8 +1905,8 @@ function HomeView({ user, currentGW, now, closed, over, official, ctx, myPts, ne
   const leagueGW = liveGW >= 1 ? liveGW : currentGW;
   const POS4 = ["GK", "DEF", "MID", "FWD"];
   const slotsOf = (ids) => { const pls = (ids || []).map((id) => BY_ID[id]).filter(Boolean); return bySlot ? POS4.map((pos) => ({ pos, pl: pls.find((x) => x.pos === pos) })) : [{ pos: null, pl: pls[0] }]; };
-  const gwScore = (gw) => { const sl = slotsOf(picksFor(gw)); const rs = sl.map((x) => x.pl ? myPts[x.pl.id + "|" + gw] : null); const got = rs.filter(Boolean);
-    return { slots: sl, total: got.reduce((n, r) => n + (r.points || 0), 0), any: got.length > 0, live: got.some((r) => r.provisional) }; };
+  const gwScore = (gw) => { const sl = slotsOf(picksFor(gw)); const rs = sl.map((x) => x.pl && !notPlayedYet(x.pl.team, gw, now) ? myPts[x.pl.id + "|" + gw] : null); const got = rs.filter(Boolean);
+    return { slots: sl, total: got.reduce((n, r) => n + (r.points || 0), 0), any: got.length > 0, live: got.some((r) => r.provisional) || sl.some((x) => x.pl && notPlayedYet(x.pl.team, gw, now)) }; };
   const cur = heroGW >= 1 ? gwScore(heroGW) : { slots: [], total: 0, any: false, live: false };
   const prev = prevGW >= 1 ? gwScore(prevGW) : null;
   // the league: everyone's locked picks for the gameweek in play
@@ -1953,9 +1960,9 @@ function HomeView({ user, currentGW, now, closed, over, official, ctx, myPts, ne
                 </div>);
               return (
                 <div key={i} className="rounded-2xl p-3.5 bg-white text-left" style={{ color: INK }}>
-                  <div className="flex items-center justify-between gap-2"><PosChip pos={p.pos} />{nextMode ? <AvailChip p={p} /> : <span className="ml-auto text-2xl font-extrabold tabular-nums" style={{ color: r ? BLUE : "#98A6BC" }}>{r ? r.points : "-"}</span>}</div>
+                  <div className="flex items-center justify-between gap-2"><PosChip pos={p.pos} />{nextMode ? <AvailChip p={p} /> : <span className="ml-auto text-2xl font-extrabold tabular-nums" style={{ color: r && !notPlayedYet(p.team, heroGW, now) ? BLUE : "#98A6BC" }}>{r && !notPlayedYet(p.team, heroGW, now) ? r.points : "-"}</span>}</div>
                   <div className="flex items-center gap-2 mt-2.5"><Crest team={p.team} size={26} /><div className="min-w-0"><div className="font-extrabold leading-tight truncate">{p.name}</div><div className="text-[11px] truncate" style={{ color: MUTED }}>{p.team}</div></div></div>
-                  <div className="mt-2 text-[11px] truncate" style={{ color: MUTED }}>{!nextMode && r && r.breakdown && whatScored(r.breakdown) ? whatScored(r.breakdown) : list.length ? <FxInline list={list} /> : "No game this week"}</div>
+                  <div className="mt-2 text-[11px] truncate" style={{ color: MUTED }}>{!nextMode && notPlayedYet(p.team, heroGW, now) ? "Plays " + playsText(p.team, heroGW) : !nextMode && r && r.breakdown && whatScored(r.breakdown) ? whatScored(r.breakdown) : list.length ? <FxInline list={list} /> : "No game this week"}</div>
                 </div>);
             })}
           </div>
@@ -2013,10 +2020,10 @@ function HomeView({ user, currentGW, now, closed, over, official, ctx, myPts, ne
                   <span className="sm:hidden text-right font-extrabold tabular-nums" style={{ color: BLUE }}>{r.total} <span className="text-[10px] font-semibold" style={{ color: MUTED }}>pts</span></span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-2 sm:mt-0">
-                  {picks.length ? picks.map((x) => <span key={x.pl.id} className="inline-flex items-center gap-1.5 rounded-lg bg-white border pl-1.5 pr-2 py-1 text-xs" style={{ borderColor: "#E3E9F2" }}><PosChip pos={x.pl.pos} /><span className="font-semibold">{x.pl.name}</span><span className="font-extrabold tabular-nums" style={{ color: BLUE }}>{x.pts}</span></span>)
+                  {picks.length ? picks.map((x) => <span key={x.pl.id} className="inline-flex items-center gap-1.5 rounded-lg bg-white border pl-1.5 pr-2 py-1 text-xs" style={{ borderColor: "#E3E9F2" }}><PosChip pos={x.pl.pos} /><span className="font-semibold">{x.pl.name}</span><span className="font-extrabold tabular-nums" style={{ color: BLUE }}>{notPlayedYet(x.pl.team, leagueGW, now) ? "-" : x.pts}</span></span>)
                     : <span className="text-xs" style={{ color: MUTED }}>{liveGW >= 1 ? "No picks made" : "Picks appear once the deadline passes"}</span>}
                 </div>
-                <span className="hidden sm:block text-right font-semibold tabular-nums" style={{ color: MUTED }}>{picks.length ? "+" + gwPts : "-"}</span>
+                <span className="hidden sm:block text-right font-semibold tabular-nums" style={{ color: MUTED }}>{picks.length && !picks.every((x) => notPlayedYet(x.pl.team, leagueGW, now)) ? "+" + gwPts : "-"}</span>
                 <span className="hidden sm:block text-right text-lg font-extrabold tabular-nums" style={{ color: BLUE }}>{r.total}</span>
               </div>; })}
           </div>
