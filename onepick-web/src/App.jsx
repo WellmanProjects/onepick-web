@@ -1929,9 +1929,9 @@ function HomeView({ user, currentGW, now, closed, over, official, ctx, myPts, ne
                   : <span className="inline-flex items-center gap-1.5 font-semibold" style={{ color: VOLT }}><Lock size={14} /> Picks locked · first points on their way</span>}
               </div>
             </div>
-            <div className="flex flex-wrap gap-2.5">
+            <div className="grid grid-cols-3 gap-2 w-full sm:w-auto sm:flex sm:flex-wrap sm:gap-2.5">
               {(nextMode ? [[periodLabel ? "Rank in " + periodLabel : "Rank", "#" + myRank + " of " + Math.max(board.length, 1)], [periodLabel ? "Points in " + periodLabel : "Points", String(myTotal)], ...(prev && prev.any ? [["GW" + prevGW + " points", String(prev.total), true]] : [])] : [["GW" + heroGW + " points", cur.any ? String(cur.total) : "-", true], [periodLabel ? "Rank in " + periodLabel : "Rank", "#" + myRank + " of " + Math.max(board.length, 1)], [periodLabel ? "Points in " + periodLabel : "Points", String(myTotal)]]).map(([k, v, big]) => (
-                <div key={k} className="rounded-2xl px-3.5 py-2.5 min-w-[84px]" style={big ? { background: VOLT, color: INK } : { background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.14)" }}>
+                <div key={k} className="rounded-2xl px-3 sm:px-3.5 py-2.5 sm:min-w-[84px]" style={big ? { background: VOLT, color: INK } : { background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.14)" }}>
                   <div className="text-[11px] font-semibold leading-tight" style={{ color: big ? INK : "rgba(255,255,255,0.7)" }}>{k}</div>
                   <div className={(big ? "text-3xl" : "text-xl") + " font-extrabold tabular-nums mt-0.5"}>{v}</div></div>))}
             </div>
@@ -1966,13 +1966,24 @@ function HomeView({ user, currentGW, now, closed, over, official, ctx, myPts, ne
             <span className="text-sm" style={{ color: "rgba(255,255,255,0.75)" }}>{filled} of {slots.length} picked{ctx.progress ? " · " + ctx.progress.used + " of " + ctx.progress.total + " used this " + (periodLabel ? "period" : "round") : ""}</span>
           </div>}
 
-          {!over && !closed && !nextMode && <div className="mt-5 rounded-2xl px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2.5" style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.14)" }}>
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-bold flex flex-wrap items-center gap-2">Next up: Gameweek {currentGW} <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs" style={{ background: "rgba(217,246,59,0.16)", color: VOLT }}><Flame size={12} />{untilDeadline(currentGW, now)}</span></div>
-              <div className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.75)" }}>{filled} of {slots.length} picked · deadline {koDay(deadlineOf(currentGW))}, {koTime(deadlineOf(currentGW))}{ctx.progress ? " · " + ctx.progress.used + " of " + ctx.progress.total + " used this " + (periodLabel ? "period" : "round") : ""}</div></div>
-            <button onClick={() => onGo("pick")} className="px-4 py-2 rounded-xl font-extrabold text-sm hover:brightness-95 transition" style={{ background: VOLT, color: INK }}>{filled === slots.length ? "Edit your picks" : filled ? "Finish your picks" : "Make your picks"}</button>
-            {bySlot && <button onClick={() => onGo("plan")} className="px-4 py-2 rounded-xl font-semibold text-sm border border-white/35 hover:bg-white/10 transition-colors">Plan ahead</button>}
-          </div>}
+          {!over && !closed && !nextMode && (() => { const btns = (cls) => <div className={cls}>
+              <button onClick={() => onGo("pick")} className="px-2.5 sm:px-4 py-2.5 rounded-xl font-extrabold text-sm text-center whitespace-nowrap hover:brightness-95 transition" style={{ background: VOLT, color: INK }}>{filled === slots.length ? "Edit your picks" : filled ? "Finish your picks" : "Make your picks"}</button>
+              {bySlot && <button onClick={() => onGo("plan")} className="px-2.5 sm:px-4 py-2.5 rounded-xl font-semibold text-sm text-center whitespace-nowrap border border-white/35 hover:bg-white/10 transition-colors">Plan ahead</button>}</div>;
+            return <div className="mt-5 rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.14)" }}>
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-bold flex flex-wrap items-center gap-2">Next up: Gameweek {currentGW} <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs" style={{ background: "rgba(217,246,59,0.16)", color: VOLT }}><Flame size={12} />{untilDeadline(currentGW, now)}</span></div>
+                  <div className="text-xs mt-1" style={{ color: "rgba(255,255,255,0.75)" }}>Deadline {koDay(deadlineOf(currentGW))}, {koTime(deadlineOf(currentGW))}{ctx.progress ? " · " + ctx.progress.used + " of " + ctx.progress.total + " used this " + (periodLabel ? "period" : "round") : ""}</div></div>
+                {btns("hidden sm:flex gap-2")}
+              </div>
+              <div className={"mt-3 grid gap-2 " + (bySlot ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-1 sm:max-w-xs")}>
+                {slots.map((x, i) => <button key={i} onClick={() => onGo("pick")} className="flex items-center gap-2 rounded-xl px-2.5 py-2 text-left min-w-0 hover:bg-white/10 transition-colors" style={x.pl ? { background: "rgba(255,255,255,0.12)" } : { border: "1.5px dashed rgba(255,255,255,0.35)" }}>
+                  {x.pos ? <PosChip pos={x.pos} /> : null}
+                  {x.pl ? <><span className="font-bold text-sm truncate min-w-0">{x.pl.name}</span><Check size={13} className="shrink-0 ml-auto" style={{ color: VOLT }} /></> : <span className="text-sm font-bold" style={{ color: VOLT }}>Pick</span>}
+                </button>)}
+              </div>
+              {btns("mt-3 grid grid-cols-2 gap-2 sm:hidden")}
+            </div>; })()}
         </div>
       </section>
 
