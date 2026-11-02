@@ -591,7 +591,7 @@ export default function App() {
         {tab === "fixtures" && <FixturesView currentGW={currentGW} />}
         {tab === "news" && <NewsView news={news} now={now} />}
         {tab === "plan" && official && official.bySlot && <PlanView news={news} format={official.format} uid={user.id} mine={lpicks[official.id] || {}} currentGW={currentGW} now={now} onSave={savePlan} />}
-        {tab === "season" && <MyPicksView official={official} showSeason={showSeasonCtx} seasonLabel={seasonLabel} picks={picks} lpicks={lpicks} currentGW={currentGW} pts={myPts} now={now} joined={user.joined} />}
+        {tab === "season" && <MyPicksView official={official} showSeason={showSeasonCtx} seasonLabel={seasonLabel} picks={picks} lpicks={lpicks} tables={tables} myId={user.id} currentGW={currentGW} pts={myPts} now={now} joined={user.joined} />}
         {tab === "leagues" && <LeaguesView myId={user.id} leagues={privateLeagues} official={official} tables={tables} picks={picks} lpicks={lpicks} currentGW={currentGW} onCreate={createLeague} onJoin={joinLeague} />}
         {tab === "rules" && <RulesView />}
       </main>
@@ -1100,7 +1100,7 @@ function PickView({ currentGW, ctxs, closed, now, news, onNews }) {
   );
 }
 
-function MyPicksView({ official, showSeason, seasonLabel, picks, lpicks, ...rest }) {
+function MyPicksView({ official, showSeason, seasonLabel, picks, lpicks, tables, myId, ...rest }) {
   const [w, setW] = useState(official ? "monthly" : "season");
   const showMonthly = official && w === "monthly";
   const ORDER = ["GK", "DEF", "MID", "FWD", "ANY"];
@@ -1111,6 +1111,7 @@ function MyPicksView({ official, showSeason, seasonLabel, picks, lpicks, ...rest
     style={w === k ? { background: DEEP } : { color: MUTED, borderColor: LINE }}>{label}</button>;
   return (
     <div>
+      {official && <div className="mb-6"><MainLeagues official={official} tables={tables} picks={picks} lpicks={lpicks} myId={myId} currentGW={rest.currentGW} /></div>}
       {official && showSeason && <div className="flex gap-1.5 mb-4">{tab("monthly", "Main game")}{tab("season", seasonLabel)}</div>}
       <SeasonView key={w} picks={src} perGw={showMonthly && official.bySlot ? 4 : 1} title={official ? (showMonthly ? "Your picks" : "Your season picks") : undefined} {...rest} />
     </div>
@@ -1294,9 +1295,33 @@ function LeagueBoard({ lg, rows, myId, currentGW, openPickIds }) {
   );
 }
 
+function MainLeagues({ official, tables, picks, lpicks, myId, currentGW }) {
+  const [openMain, setOpenMain] = useState({ season: true, monthly: true });
+  const mainRows = tables.main || [];
+  const officialRows = official ? (tables[official.id] || []) : null;
+  const mains = [{ id: "monthly", name: "Main game", sub: official ? resetNote(official.format).toLowerCase() + ", a winner each period" : "a winner each period, players come back", format: official ? official.format : { type: "gws", n: 4 }, rows: officialRows || mainRows, picks: official ? Object.values((lpicks[official.id] || {})[currentGW] || {}) : (picks[currentGW] ? [picks[currentGW]] : []) },
+    ...(SEASON_GAME ? [{ id: "season", name: "OnePick Season", sub: "one table, all 38 gameweeks, no repeats", format: { type: "season" }, rows: mainRows, picks: picks[currentGW] ? [picks[currentGW]] : [] }] : [])];
+  return (
+    <div className="space-y-3">
+      <h3 className="font-bold flex items-center gap-2"><Trophy size={16} style={{ color: BLUE }} /> {mains.length > 1 ? "Main leagues" : "Main league"}</h3>
+        {mains.map((m) => (
+          <div key={m.id} className="rounded-2xl overflow-hidden border" style={{ borderColor: LINE, boxShadow: SHADOW }}>
+            <button onClick={() => setOpenMain({ ...openMain, [m.id]: !openMain[m.id] })} className="w-full px-4 py-3.5 text-white flex items-center justify-between gap-3 text-left" style={{ background: "linear-gradient(135deg,#0A2342,#1B4F8F)" }}>
+              <div><div className="font-bold">{m.name}</div>
+                <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Everyone's in · {new Set(m.rows.map((r) => r.user_id)).size} {new Set(m.rows.map((r) => r.user_id)).size === 1 ? "gaffer" : "gaffers"} · {m.sub}</div></div>
+              <ChevronRight size={18} className={"shrink-0 transition-transform " + (openMain[m.id] ? "rotate-90" : "")} style={{ color: VOLT }} />
+            </button>
+            {openMain[m.id] && <div className="bg-white"><LeagueBoard lg={m} rows={m.rows} myId={myId} currentGW={currentGW} openPickIds={m.picks} /></div>}
+          </div>
+        ))}
+
+    </div>
+  );
+}
+
 function LeaguesView({ myId, leagues, official, tables, picks, lpicks, currentGW, onCreate, onJoin }) {
   const [name, setName] = useState(""); const [joinCode, setJoinCode] = useState(""); const [joinMsg, setJoinMsg] = useState(""); const [open, setOpen] = useState(null);
-  const [reset, setReset] = useState(false); const [openMain, setOpenMain] = useState({ season: true, monthly: true }); const [fmt, setFmt] = useState("gws"); const [blockN, setBlockN] = useState(4);
+  const [reset, setReset] = useState(false); const [fmt, setFmt] = useState("gws"); const [blockN, setBlockN] = useState(4);
   const [created, setCreated] = useState(null); const [copied, setCopied] = useState(false); const [busy, setBusy] = useState(false); const [createErr, setCreateErr] = useState("");
   const card = "rounded-2xl bg-white border p-5";
   const field = "w-full mb-2 px-3.5 py-2.5 rounded-xl bg-white border text-sm focus:outline-none focus:ring-2";
@@ -1312,13 +1337,32 @@ function LeaguesView({ myId, leagues, official, tables, picks, lpicks, currentGW
   const copy = async (text) => { try { await navigator.clipboard.writeText(text); } catch {} setCopied(true); setTimeout(() => setCopied(false), 1500); };
   const FMTS = [...(SEASON_GAME ? [["season", "Whole season", "One winner at the end"]] : []), ["gws", "Set number of gameweeks", "Pick the length of each period. A player can be used once per period."], ["weekly", "Every week", "Players come back every gameweek, so you can pick the same player each week."], ["monthly", "Calendar month", "A fresh start each month"]];
   const resetOn = SEASON_GAME ? reset : true;
-  const mainRows = tables.main || [];
-  const officialRows = official ? (tables[official.id] || []) : null;
-  const mains = [{ id: "monthly", name: "Main game", sub: official ? resetNote(official.format).toLowerCase() + ", a winner each period" : "a winner each period, players come back", format: official ? official.format : { type: "gws", n: 4 }, rows: officialRows || mainRows, picks: official ? Object.values((lpicks[official.id] || {})[currentGW] || {}) : (picks[currentGW] ? [picks[currentGW]] : []) },
-    ...(SEASON_GAME ? [{ id: "season", name: "OnePick Season", sub: "one table, all 38 gameweeks, no repeats", format: { type: "season" }, rows: mainRows, picks: picks[currentGW] ? [picks[currentGW]] : [] }] : [])];
   return (
-    <div className="grid lg:grid-cols-5 gap-5">
-      <div className="lg:col-span-2 space-y-4">
+    <div className="space-y-8">
+      <MainLeagues official={official} tables={tables} picks={picks} lpicks={lpicks} myId={myId} currentGW={currentGW} />
+
+      <div className="space-y-3">
+        <h3 className="font-bold flex items-center gap-2 "><Users size={16} style={{ color: BLUE }} /> Your leagues</h3>
+        {leagues.length === 0 && <div className="rounded-2xl border border-dashed p-8 text-center text-sm" style={{ borderColor: "#C5D0E0", color: MUTED }}>No private leagues yet. Start one, or join a mate's with their code.</div>}
+        {leagues.map((lg) => {
+          const isOpen = open === lg.id;
+          const usesOwn = lg.reset && lg.format.type !== "season";
+          return <div key={lg.id} className="rounded-2xl bg-white border overflow-hidden" style={{ borderColor: LINE, boxShadow: SHADOW }}>
+            <button onClick={() => setOpen(isOpen ? null : lg.id)} className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-black/5 transition-colors">
+              <div className="text-left"><div className="font-bold">{lg.name}</div>
+                <div className="text-xs" style={{ color: MUTED }}>{lg.memberCount} {lg.memberCount === 1 ? "gaffer" : "gaffers"} · {formatLabel(lg.format)}{lg.reset ? " · picks reset" : ""} · code <span className="font-mono tracking-widest font-semibold" style={{ color: BLUE }}>{lg.code}</span></div></div>
+              <ChevronRight size={18} className={"transition-transform " + (isOpen ? "rotate-90" : "")} style={{ color: MUTED }} />
+            </button>
+            {isOpen && <div className="border-t" style={{ borderColor: LINE }}>
+              <LeagueBoard lg={lg} rows={tables[lg.id] || []} myId={myId} currentGW={currentGW} openPickIds={usesOwn ? Object.values((lpicks[lg.id] || {})[currentGW] || {}) : (picks[currentGW] ? [picks[currentGW]] : [])} /></div>}
+          </div>;
+        })}
+      </div>
+
+      <div>
+        <h3 className="font-bold flex items-center gap-2 mb-1"><Plus size={16} style={{ color: BLUE }} /> Start or join a league</h3>
+        <p className="text-sm mb-3" style={{ color: MUTED }}>Play against your mates in a private league, with its own table and its own code.</p>
+        <div className="grid md:grid-cols-2 gap-4 items-start">
         <div className={card} style={{ borderColor: LINE, boxShadow: SHADOW }}>
           <h3 className="font-bold mb-1 flex items-center gap-2"><Plus size={16} style={{ color: BLUE }} /> Start a league</h3>
           <p className="text-xs mb-3" style={{ color: MUTED }}>You'll get a code to share with your mates.</p>
@@ -1363,35 +1407,7 @@ function LeaguesView({ myId, leagues, official, tables, picks, lpicks, currentGW
           <button onClick={join} className="w-full py-2.5 rounded-xl font-semibold border hover:bg-black/5 transition-colors" style={{ borderColor: LINE }}>Join league</button>
           {joinMsg && <div className={"text-sm mt-2 " + (joinMsg === "Joined!" ? "text-emerald-600" : "text-rose-600")}>{joinMsg}</div>}
         </div>
-      </div>
-      <div className="lg:col-span-3 space-y-3">
-        <h3 className="font-bold flex items-center gap-2"><Trophy size={16} style={{ color: BLUE }} /> {mains.length > 1 ? "Main leagues" : "Main league"}</h3>
-        {mains.map((m) => (
-          <div key={m.id} className="rounded-2xl overflow-hidden border" style={{ borderColor: LINE, boxShadow: SHADOW }}>
-            <button onClick={() => setOpenMain({ ...openMain, [m.id]: !openMain[m.id] })} className="w-full px-4 py-3.5 text-white flex items-center justify-between gap-3 text-left" style={{ background: "linear-gradient(135deg,#0A2342,#1B4F8F)" }}>
-              <div><div className="font-bold">{m.name}</div>
-                <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Everyone's in · {new Set(m.rows.map((r) => r.user_id)).size} {new Set(m.rows.map((r) => r.user_id)).size === 1 ? "gaffer" : "gaffers"} · {m.sub}</div></div>
-              <ChevronRight size={18} className={"shrink-0 transition-transform " + (openMain[m.id] ? "rotate-90" : "")} style={{ color: VOLT }} />
-            </button>
-            {openMain[m.id] && <div className="bg-white"><LeagueBoard lg={m} rows={m.rows} myId={myId} currentGW={currentGW} openPickIds={m.picks} /></div>}
-          </div>
-        ))}
-
-        <h3 className="font-bold flex items-center gap-2 pt-3"><Users size={16} style={{ color: BLUE }} /> Your leagues</h3>
-        {leagues.length === 0 && <div className="rounded-2xl border border-dashed p-8 text-center text-sm" style={{ borderColor: "#C5D0E0", color: MUTED }}>No private leagues yet. Start one, or join a mate's with their code.</div>}
-        {leagues.map((lg) => {
-          const isOpen = open === lg.id;
-          const usesOwn = lg.reset && lg.format.type !== "season";
-          return <div key={lg.id} className="rounded-2xl bg-white border overflow-hidden" style={{ borderColor: LINE, boxShadow: SHADOW }}>
-            <button onClick={() => setOpen(isOpen ? null : lg.id)} className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-black/5 transition-colors">
-              <div className="text-left"><div className="font-bold">{lg.name}</div>
-                <div className="text-xs" style={{ color: MUTED }}>{lg.memberCount} {lg.memberCount === 1 ? "gaffer" : "gaffers"} · {formatLabel(lg.format)}{lg.reset ? " · picks reset" : ""} · code <span className="font-mono tracking-widest font-semibold" style={{ color: BLUE }}>{lg.code}</span></div></div>
-              <ChevronRight size={18} className={"transition-transform " + (isOpen ? "rotate-90" : "")} style={{ color: MUTED }} />
-            </button>
-            {isOpen && <div className="border-t" style={{ borderColor: LINE }}>
-              <LeagueBoard lg={lg} rows={tables[lg.id] || []} myId={myId} currentGW={currentGW} openPickIds={usesOwn ? Object.values((lpicks[lg.id] || {})[currentGW] || {}) : (picks[currentGW] ? [picks[currentGW]] : [])} /></div>}
-          </div>;
-        })}
+        </div>
       </div>
     </div>
   );
